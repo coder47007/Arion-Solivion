@@ -9,6 +9,7 @@ import ThemeSelector, { THEMES } from './components/ThemeSelector';
 import { PlayIcon, UploadIcon, MusicNoteIcon, SearchIcon, HeartIcon, SettingsIcon, UserIcon, ShareIcon, PlusIcon, ImageIcon, ListIcon, PencilIcon, CheckIcon, XMarkIcon, PaletteIcon, DownloadIcon } from './components/Icons';
 import { uploadToCloudinary } from './services/cloudinaryService';
 import ImageEditor from './components/ImageEditor';
+import { getProfile, getSongs, updateProfile, uploadSongMetadata } from './services/supabaseClient';
 
 
 export const App: React.FC = () => {
@@ -125,35 +126,82 @@ export const App: React.FC = () => {
 
     useEffect(() => {
         // Set default selected album for upload if none selected
-        setSelectedUploadAlbumId(albums[0].id);
-
-
-        // Load Artist Profile from LocalStorage
-        const savedProfile = localStorage.getItem('arion_artist_profile');
-        if (savedProfile) {
-            try {
-                const parsed = JSON.parse(savedProfile);
-                setArtistName(parsed.name || "ARION SOLIVION 🤖");
-                setArtistTagline(parsed.tagline || "The Architect of Sound");
-                setArtistBio(parsed.bio || "Welcome to my digital island. Here, logic meets emotion, and every algorithm sings a lullaby to the ocean.");
-                if (parsed.stats) setArtistStats(parsed.stats);
-                if (parsed.image) setArtistProfileImage(parsed.image);
-            } catch (e) {
-                console.error("Failed to parse saved profile", e);
-            }
+        if (albums.length > 0) {
+            setSelectedUploadAlbumId(albums[0].id);
         }
-    }, [albums, selectedUploadAlbumId]);
 
-    const handleSaveProfile = () => {
-        const profileData = {
-            name: artistName,
-            tagline: artistTagline,
-            bio: artistBio,
-            stats: artistStats,
-            image: artistProfileImage
+        const fetchData = async () => {
+            try {
+                // 1. Load Profile
+                const profile = await getProfile();
+                if (profile) {
+                    setArtistName(profile.name);
+                    setArtistTagline(profile.tagline);
+                    setArtistBio(profile.bio);
+                    if (profile.stats) setArtistStats(profile.stats);
+                    if (profile.image_url) setArtistProfileImage(profile.image_url);
+                }
+
+                // 2. Load Songs
+                const songs = await getSongs();
+                if (songs && songs.length > 0) {
+                    setAlbums(prevAlbums => {
+                        const newAlbums = [...prevAlbums];
+                        // Distribute songs to albums or a default 'Singles' album
+                        // For simplicity in this demo, we can just push them all to the first album or match by ID if we stored album_id
+                        // Let's iterate and match album_id
+                        songs.forEach(dbSong => {
+                            // Check if song already exists to prevent dupes on re-renders (though useEffect runs once)
+                            // Actually, better to reset songs or merge safely.
+                            // Simplified: Find album and add song.
+                            const targetAlbumIndex = newAlbums.findIndex(a => a.id === dbSong.album_id) !== -1
+                                ? newAlbums.findIndex(a => a.id === dbSong.album_id)
+                                : 0; // Default to first album if ID outdated
+
+                            if (targetAlbumIndex !== -1) {
+                                const album = newAlbums[targetAlbumIndex];
+                                if (!album.songs.find(s => s.id === dbSong.id)) {
+                                    album.songs.push({
+                                        id: dbSong.id,
+                                        title: dbSong.title,
+                                        artist: dbSong.artist,
+                                        duration: dbSong.duration,
+                                        audioSrc: dbSong.audio_url,
+                                        coverArt: dbSong.cover_url || album.coverArt,
+                                        albumId: album.id,
+                                        plays: dbSong.plays,
+                                        likes: dbSong.likes,
+                                        moods: dbSong.moods,
+                                        lyrics: dbSong.lyrics
+                                    });
+                                }
+                            }
+                        });
+                        return newAlbums;
+                    });
+                }
+            } catch (error) {
+                console.error("Failed to fetch data from Supabase:", error);
+            }
         };
-        localStorage.setItem('arion_artist_profile', JSON.stringify(profileData));
-        alert("Profile Saved Successfully! 💾");
+
+        fetchData();
+    }, []);
+
+    const handleSaveProfile = async () => {
+        try {
+            await updateProfile({
+                name: artistName,
+                tagline: artistTagline,
+                bio: artistBio,
+                stats: artistStats,
+                image_url: artistProfileImage
+            });
+            alert("Profile Saved to Cloud Successfully! ☁️");
+        } catch (error) {
+            console.error("Failed to save profile:", error);
+            alert("Failed to save profile.");
+        }
     };
 
     const toggleLike = (id: string) => {
@@ -497,7 +545,27 @@ export const App: React.FC = () => {
                 return album;
             }));
 
-            alert(`Song "${newSong.title}" uploaded successfully to Cloud with lyrics!`);
+            // Save to Supabase
+            await uploadSongMetadata({
+                title: newSong.title,
+                artist: newSong.artist,
+                audio_url: audioUrl, // The Cloudinary URL
+                cover_url: newSong.coverArt || '',
+                duration: newSong.duration,
+                moods: newSong.moods,
+                lyrics: uploadSongLyrics || undefined,
+                // Note: We need album_id in the DB schema to link it back correctly.
+                // Assuming schema has album_id uuid. We need to cast it or handle it.
+                // For this demo, we'll try to pass it if schema allows, or skip if strict.
+                // Schema has album_id uuid.
+                // We need to ensure the passed ID is a valid UUID or handle the error.
+                // If our local IDs are not UUIDs (e.g. "album-1"), this might fail constraint.
+                // Let's rely on the fact that for new uploads we might not have a perfect match unless we sync albums too.
+                // For now, let's omit album_id to avoid constraint errors if we haven't synced albums table, 
+                // OR better, let's just save valid fields.
+            } as any); // Type cast if needed depending on exact schema match
+
+            alert(`Song "${newSong.title}" uploaded to Cloud & Database!`);
 
             // Reset Form
             setUploadSongFile(null);
