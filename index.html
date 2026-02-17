@@ -1,97 +1,36 @@
-
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Arion Solivion | Melody Cove</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Quicksand:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Quicksand', 'sans-serif'], // Softer, friendlier font
-              display: ['Orbitron', 'sans-serif'], // Kept for the AI/Tech feel
-            },
-            colors: {
-              caribbean: {
-                deep: 'var(--color-deep)',
-                ocean: 'var(--color-ocean)',
-                turquoise: 'var(--color-turquoise)',
-                sand: 'var(--color-sand)',
-                coral: 'var(--color-coral)',
-                sun: 'var(--color-sun)',
-              }
-            },
-            animation: {
-              'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-              'float': 'float 6s ease-in-out infinite',
-              'float-up': 'floatUp 25s linear infinite',
-            },
-            keyframes: {
-              float: {
-                '0%, 100%': { transform: 'translateY(0)' },
-                '50%': { transform: 'translateY(-15px) rotate(2deg)' },
-              },
-              floatUp: {
-                '0%': { transform: 'translateY(120vh) rotate(0deg) scale(0.8)', opacity: '0' },
-                '10%': { opacity: '0.6' },
-                '90%': { opacity: '0.6' },
-                '100%': { transform: 'translateY(-20vh) rotate(20deg) scale(1.1)', opacity: '0' },
-              }
-            }
-          },
-        },
-      }
-    </script>
-    <style>
-      :root {
-        /* Default Caribbean Theme */
-        --color-deep: #083344;
-        --color-ocean: #0e7490;
-        --color-turquoise: #2dd4bf;
-        --color-sand: #fef3c7;
-        --color-coral: #fb7185;
-        --color-sun: #fbbf24;
-      }
 
-      body {
-        background-color: var(--color-deep);
-        color: #ecfeff; /* Cyan 50 */
-        overflow-x: hidden;
-        transition: background-color 0.5s ease;
-      }
-      /* Custom Scrollbar - Caribbean style */
-      ::-webkit-scrollbar {
-        width: 10px;
-      }
-      ::-webkit-scrollbar-track {
-        background: var(--color-deep); 
-      }
-      ::-webkit-scrollbar-thumb {
-        background: linear-gradient(to bottom, var(--color-turquoise), var(--color-ocean)); 
-        border-radius: 5px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: var(--color-coral); 
-      }
-    </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.41.0"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arion Solivion | Melody Cove</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Quicksand:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --color-deep: #083344;
+      --color-ocean: #0e7490;
+      --color-turquoise: #2dd4bf;
+      --color-sand: #fef3c7;
+      --color-coral: #fb7185;
+      --color-sun: #fbbf24;
+    }
+
+    body {
+      margin: 0;
+      background-color: var(--color-deep);
+      color: #ecfeff;
+      overflow-x: hidden;
+    }
+  </style>
+
 </head>
-  <body>
-    <div id="root"></div>
+
+<body>
+  <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
 </body>
+
 </html>
