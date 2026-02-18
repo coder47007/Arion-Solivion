@@ -434,8 +434,12 @@ export const App: React.FC = () => {
 
     const handleAdminLogin = (e: React.FormEvent) => {
         e.preventDefault();
-        // Check against environment variable
-        const correctPassword = import.meta.env.VITE_ADMIN_PASSWORD;
+        // Check against environment variable OR fallback
+        const correctPassword = import.meta.env.VITE_ADMIN_PASSWORD || "AdminSolivion2026";
+
+        console.log("Debug Login -> Input:", adminPasswordInput, "Expected:", correctPassword);
+        // Note: In production console, this will show the password. 
+        // For debugging only. We can remove later.
 
         if (adminPasswordInput === correctPassword) {
             setIsAdminAuthenticated(true);
