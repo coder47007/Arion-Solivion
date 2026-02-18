@@ -83,7 +83,7 @@ export const App: React.FC = () => {
 
 
     // Artist Profile State
-    const [artistProfileImage, setArtistProfileImage] = useState("https://images.unsplash.com/photo-1534531173927-aeb928d54385?q=80&w=800&auto=format&fit=crop");
+    const [artistProfileImage, setArtistProfileImage] = useState("https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=800&auto=format&fit=crop");
     const [artistName, setArtistName] = useState("ARION SOLIVION 🤖");
     const [artistTagline, setArtistTagline] = useState("The Architect of Sound");
     const [artistBio, setArtistBio] = useState("Welcome to my digital island. Here, logic meets emotion, and every algorithm sings a lullaby to the ocean.");
@@ -438,10 +438,8 @@ export const App: React.FC = () => {
         const correctPassword = import.meta.env.VITE_ADMIN_PASSWORD || "AdminSolivion2026";
 
         console.log("Debug Login -> Input:", adminPasswordInput, "Expected:", correctPassword);
-        // Note: In production console, this will show the password. 
-        // For debugging only. We can remove later.
 
-        if (adminPasswordInput === correctPassword) {
+        if (adminPasswordInput.trim() === correctPassword) {
             setIsAdminAuthenticated(true);
             setShowAdminLogin(false);
             // Stay on current view
