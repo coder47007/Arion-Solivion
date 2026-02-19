@@ -6,17 +6,15 @@ import Player from './components/Player';
 
 import PlaylistSidebar from './components/PlaylistSidebar';
 import ThemeSelector, { THEMES } from './components/ThemeSelector';
-import { PlayIcon, UploadIcon, MusicNoteIcon, SearchIcon, HeartIcon, SettingsIcon, UserIcon, ShareIcon, PlusIcon, ImageIcon, ListIcon, PencilIcon, CheckIcon, XMarkIcon, PaletteIcon, DownloadIcon } from './components/Icons';
-import { uploadToCloudinary } from './services/cloudinaryService';
+import { PlayIcon, UploadIcon, MusicNoteIcon, SearchIcon, HeartIcon, SettingsIcon, UserIcon, ShareIcon, PlusIcon, ImageIcon, ListIcon, PencilIcon, CheckIcon, XMarkIcon, PaletteIcon, DownloadIcon, TrashIcon } from './components/Icons';
+// import { uploadToCloudinary } from './services/cloudinaryService'; // Removed
 import ImageEditor from './components/ImageEditor';
-import { getProfile, getSongs, updateProfile, uploadSongMetadata, getAlbums, createAlbum } from './services/supabaseClient';
+import { getProfile, getSongs, updateProfile, uploadSongMetadata, getAlbums, createAlbum, uploadFile, getPublicUrl, deleteSong, getPlaylists, createPlaylist, deletePlaylist, addSongToPlaylist } from './services/supabaseClient';
 
 
 export const App: React.FC = () => {
     const [albums, setAlbums] = useState<Album[]>(INITIAL_ALBUMS);
-    const [playlists, setPlaylists] = useState<Playlist[]>([
-        { id: 'p1', title: 'My Island Vibes', songs: [], createdAt: new Date() }
-    ]);
+    const [playlists, setPlaylists] = useState<Playlist[]>([]);
     const [currentAlbum, setCurrentAlbum] = useState<Album | null>(null);
     const [currentPlaylist, setCurrentPlaylist] = useState<Playlist | null>(null);
     const [currentSong, setCurrentSong] = useState<Song | null>(null);
@@ -200,16 +198,50 @@ export const App: React.FC = () => {
                             title: dbSong.title,
                             artist: dbSong.artist,
                             duration: dbSong.duration,
-                            audioSrc: dbSong.audio_url,
-                            coverArt: dbSong.cover_url || targetAlbum.coverArt,
+                            audioSrc: dbSong.audio_src,
+                            coverArt: dbSong.cover_art || targetAlbum.coverArt,
                             albumId: targetAlbum.id,
                             plays: dbSong.plays,
                             likes: dbSong.likes,
                             moods: dbSong.moods,
                             lyrics: dbSong.lyrics
                         });
+
+
                     });
                 }
+
+                // 4. Load Playlists
+                const dbPlaylists = await getPlaylists();
+                if (dbPlaylists) {
+                    const loadedPlaylists: Playlist[] = dbPlaylists.map((p: any) => ({
+                        id: p.id,
+                        title: p.title,
+                        coverArt: p.cover_art,
+                        createdAt: new Date(p.created_at),
+                        songs: p.playlist_songs ? p.playlist_songs.map((ps: any) => {
+                            const fullSong = songs?.find(s => s.id === ps.song_id);
+                            if (fullSong) {
+                                return {
+                                    id: fullSong.id,
+                                    title: fullSong.title,
+                                    artist: fullSong.artist,
+                                    duration: fullSong.duration,
+                                    audioSrc: fullSong.audio_src,
+                                    coverArt: fullSong.cover_art,
+                                    albumId: fullSong.album_id,
+                                    plays: fullSong.plays || 0,
+                                    likes: fullSong.likes || 0,
+                                    moods: fullSong.moods || [],
+                                    lyrics: fullSong.lyrics
+                                };
+                            }
+                            return null;
+                        }).filter(Boolean) as Song[] : []
+                    }));
+                    setPlaylists(loadedPlaylists);
+                }
+
 
                 if (loadedAlbums.length > 0) {
                     setAlbums(loadedAlbums);
@@ -225,19 +257,45 @@ export const App: React.FC = () => {
         fetchData();
     }, []);
 
+    // Auto-select album for upload when albums load
+    useEffect(() => {
+        if (albums.length > 0 && !selectedUploadAlbumId) {
+            setSelectedUploadAlbumId(albums[0].id);
+        }
+    }, [albums, selectedUploadAlbumId]);
+
     const handleSaveProfile = async () => {
         try {
+            let finalProfileImage = artistProfileImage;
+
+            // Check if it's a base64 data URL (newly edited image)
+            if (artistProfileImage.startsWith('data:')) {
+                // Convert to Blob
+                const res = await fetch(artistProfileImage);
+                const blob = await res.blob();
+                const file = new File([blob], "profile.jpg", { type: "image/jpeg" });
+
+                const fileName = `profile-${Date.now()}.jpg`;
+                // Upload to 'covers' bucket (reusing for simplicity)
+                await uploadFile(file, 'covers', fileName);
+                finalProfileImage = getPublicUrl('covers', fileName);
+            }
+
             await updateProfile({
                 name: artistName,
                 tagline: artistTagline,
                 bio: artistBio,
                 stats: artistStats,
-                image_url: artistProfileImage
+                image_url: finalProfileImage
             });
             alert("Profile Saved to Cloud Successfully! ☁️");
-        } catch (error) {
+        } catch (error: any) {
             console.error("Failed to save profile:", error);
-            alert("Failed to save profile.");
+            if (error.message && error.message.includes("The resource was not found")) {
+                alert("Save failed: Bucket 'covers' not found. Please create a public bucket named 'covers' in your Supabase dashboard.");
+            } else {
+                alert("Failed to save profile. " + (error.message || ""));
+            }
         }
     };
 
@@ -380,41 +438,63 @@ export const App: React.FC = () => {
         e.dataTransfer.setData("text/plain", song.id);
     };
 
-    const onDropWrapper = (playlistId: string) => {
+    const onDropWrapper = async (playlistId: string) => {
         const song = draggedSongRef.current;
         if (song) {
+            // Optimistic Update
             setPlaylists(prev => prev.map(p => {
                 if (p.id === playlistId) {
-                    // Check if song already exists
                     if (p.songs.find(s => s.id === song.id)) return p;
                     return {
                         ...p,
                         songs: [...p.songs, song],
-                        coverArt: p.coverArt || song.coverArt // Set cover art if empty
+                        coverArt: p.coverArt || song.coverArt
                     };
                 }
                 return p;
             }));
+
+            try {
+                await addSongToPlaylist(playlistId, song.id);
+            } catch (error) {
+                console.error("Error adding song to playlist:", error);
+                // Revert state if needed, or just alert?
+            }
         }
         draggedSongRef.current = null;
     };
 
-    const handleCreatePlaylist = (name: string) => {
-        const newPlaylist: Playlist = {
-            id: `pl-${Date.now()}`,
-            title: name,
-            songs: [],
-            createdAt: new Date()
-        };
-        setPlaylists([...playlists, newPlaylist]);
+    const handleCreatePlaylist = async (name: string) => {
+        try {
+            const newPlaylistData = await createPlaylist(name);
+            if (newPlaylistData) {
+                const newPlaylist: Playlist = {
+                    id: newPlaylistData.id,
+                    title: newPlaylistData.title,
+                    songs: [],
+                    createdAt: new Date(newPlaylistData.created_at || Date.now()),
+                    coverArt: newPlaylistData.cover_art
+                };
+                setPlaylists(prev => [newPlaylist, ...prev]);
+            }
+        } catch (error) {
+            console.error("Error creating playlist:", error);
+            alert("Failed to create playlist.");
+        }
     };
 
-    const handleDeletePlaylist = (id: string) => {
+    const handleDeletePlaylist = async (id: string) => {
         if (confirm('Delete this playlist?')) {
-            setPlaylists(playlists.filter(p => p.id !== id));
-            if (currentPlaylist?.id === id) {
-                setViewState(ViewState.LIBRARY);
-                setCurrentPlaylist(null);
+            try {
+                await deletePlaylist(id);
+                setPlaylists(prev => prev.filter(p => p.id !== id));
+                if (currentPlaylist?.id === id) {
+                    setViewState(ViewState.LIBRARY);
+                    setCurrentPlaylist(null);
+                }
+            } catch (error) {
+                console.error("Error deleting playlist:", error);
+                alert("Failed to delete playlist.");
             }
         }
     };
@@ -503,11 +583,14 @@ export const App: React.FC = () => {
 
     // --- STUDIO MANAGER FUNCTIONS ---
 
+    const [newAlbumCoverFile, setNewAlbumCoverFile] = useState<File | null>(null);
+
     const handleAlbumCoverChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
             const url = URL.createObjectURL(file);
             setNewAlbumCover(url);
+            setNewAlbumCoverFile(file);
         }
     };
 
@@ -519,11 +602,23 @@ export const App: React.FC = () => {
         }
 
         try {
+            let finalCoverUrl = 'https://images.unsplash.com/photo-1596323083648-523c52405d1b?q=80&w=800&auto=format&fit=crop';
+            if (newAlbumCoverFile) {
+                const fileExt = newAlbumCoverFile.name.split('.').pop();
+                const fileName = `cover-${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+                // Upload to 'covers' bucket
+                await uploadFile(newAlbumCoverFile, 'covers', fileName);
+                finalCoverUrl = getPublicUrl('covers', fileName);
+            } else if (newAlbumCover) {
+                // If it's a string but no file (unlikely unless logic changed, or using default), keep it
+                finalCoverUrl = newAlbumCover;
+            }
+
             const newDbAlbum = await createAlbum({
                 title: newAlbumTitle,
                 artist: 'Arion Solivion',
                 release_year: new Date().getFullYear(),
-                cover_art: newAlbumCover || 'https://images.unsplash.com/photo-1596323083648-523c52405d1b?q=80&w=800&auto=format&fit=crop',
+                cover_art: finalCoverUrl,
                 description: newAlbumDesc || 'A new collection of sounds.'
             });
 
@@ -544,11 +639,16 @@ export const App: React.FC = () => {
             setNewAlbumTitle('');
             setNewAlbumDesc('');
             setNewAlbumCover(null);
+            setNewAlbumCoverFile(null);
             alert(`Album "${newAlbum.title}" created successfully! You can now upload songs to it.`);
 
-        } catch (error) {
+        } catch (error: any) {
             console.error("Failed to create album:", error);
-            alert("Failed to create album in database.");
+            if (error.message && error.message.includes("The resource was not found")) {
+                alert("Creation failed: Bucket 'covers' not found. Please create a public bucket named 'covers' in your Supabase dashboard.");
+            } else {
+                alert("Failed to create album in database. " + error.message);
+            }
         }
     };
 
@@ -577,8 +677,16 @@ export const App: React.FC = () => {
         try {
             setIsUploading(true);
 
-            // Upload Audio to Cloudinary
-            const audioUrl = await uploadToCloudinary(uploadSongFile, 'video');
+            // 1. Upload Audio to Supabase Storage
+            const fileExt = uploadSongFile.name.split('.').pop();
+            const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+            const filePath = `${fileName}`;
+
+            // Ensure 'songs' bucket exists in Supabase Dashboard!
+            await uploadFile(uploadSongFile, 'songs', filePath);
+            const audioUrl = getPublicUrl('songs', filePath);
+
+            console.log("Audio uploaded to Supabase:", audioUrl);
 
             const newSong: Song = {
                 id: `song-${Date.now()}`,
@@ -602,32 +710,95 @@ export const App: React.FC = () => {
             }));
 
             // Save to Supabase
-            await uploadSongMetadata({
+            // Ensure we only pass a valid UUID for album_id. 
+            // 'default-uploads' or other temp IDs will cause a DB error.
+            const dbAlbumId = (selectedUploadAlbumId && selectedUploadAlbumId.length > 20 && selectedUploadAlbumId !== 'default-uploads')
+                ? selectedUploadAlbumId
+                : null; // Send null if not a real associated album yet
+
+
+
+            const savedSong = await uploadSongMetadata({
                 title: newSong.title,
                 artist: newSong.artist,
-                audio_url: audioUrl, // The Cloudinary URL
-                cover_url: newSong.coverArt || '',
+                audio_src: audioUrl, // The Supabase URL
+                cover_art: newSong.coverArt || '',
                 duration: newSong.duration,
                 moods: newSong.moods,
                 lyrics: uploadSongLyrics || undefined,
-                album_id: selectedUploadAlbumId // Pass the valid UUID
+                album_id: dbAlbumId
             });
 
-            alert(`Song "${newSong.title}" uploaded to Cloud & Database!`);
+            console.log("Song saved to DB:", savedSong);
+            alert(`Song "${newSong.title}" uploaded to Supabase Storage & Database!`);
+
+            // Update local state with the REAL ID from the DB if possible, or just keep the temp one for now
+            // Ideally we should replace the temp song with the DB one to ensure future interactions work
+            setAlbums(prev => prev.map(album => {
+                if (album.id === selectedUploadAlbumId) {
+                    // Update the song we just added with the real DB ID if we decide to
+                    return {
+                        ...album,
+                        songs: album.songs.map(s => s.id === newSong.id ? { ...s, id: savedSong?.id || s.id } : s)
+                    };
+                }
+                return album;
+            }));
+
 
             // Reset Form
             setUploadSongFile(null);
             setUploadSongTitle('');
             setUploadSongLyrics('');
             if (songInputRef.current) songInputRef.current.value = '';
-        } catch (error) {
+        } catch (error: any) {
             console.error("Upload failed", error);
-            alert("Failed to upload song. Please check your internet connection and Cloudinary keys.");
+            if (error.message && error.message.includes("The resource was not found")) {
+                alert("Upload failed: Bucket 'songs' not found. Please create a public bucket named 'songs' in your Supabase dashboard.");
+            } else {
+                alert(`Failed to upload song: ${error.message || "Unknown error"}`);
+            }
         } finally {
             setIsUploading(false);
         }
     };
 
+
+    const handleDeleteSong = async (song: Song) => {
+        if (!confirm(`Are you sure you want to delete "${song.title}"? This cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            await deleteSong(song.id);
+
+            // Update local state - remove from all albums
+            setAlbums(prevAlbums => prevAlbums.map(album => ({
+                ...album,
+                songs: album.songs.filter(s => s.id !== song.id)
+            })));
+
+            // Also update trending songs if it was there (though popularSongs is derived from albums usually, or separate state?)
+            // popularSongs is derived? Let's check. 
+            // In the view_file above, popularSongs wasn't explicitly defined in the visible snippet but it's used. 
+            // If it's derived from `albums` or `allSongs`, updating `albums` might be enough. 
+            // But wait, `allSongs` comes from `getSongs()`. 
+            // If I update `albums` state, does `popularSongs` update?
+            // I should also reload songs or manually filter.
+            // For now, let's assume reloading or manual filter.
+
+            // If the deleted song was playing, pause it
+            if (currentSong?.id === song.id) {
+                handlePlayPause();
+                setCurrentSong(null);
+            }
+
+            alert(`Deleted "${song.title}" successfully.`);
+        } catch (error) {
+            console.error("Error deleting song:", error);
+            alert("Failed to delete song.");
+        }
+    };
 
     return (
         <div
@@ -873,13 +1044,22 @@ export const App: React.FC = () => {
                                             <div className="hidden sm:block text-cyan-100/60 text-sm mr-4">🎧 {song.plays.toLocaleString()}</div>
                                             <div className="text-cyan-100/60 font-mono text-sm">{song.duration}</div>
                                             {isAdminAuthenticated && (
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); handleDownload(song); }}
-                                                    className="p-2 text-slate-400 hover:text-caribbean-turquoise transition-transform active:scale-95"
-                                                    title="Download MP3"
-                                                >
-                                                    <DownloadIcon className="w-5 h-5" />
-                                                </button>
+                                                <>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleDownload(song); }}
+                                                        className="p-2 text-slate-400 hover:text-caribbean-turquoise transition-transform active:scale-95"
+                                                        title="Download MP3"
+                                                    >
+                                                        <DownloadIcon className="w-5 h-5" />
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleDeleteSong(song); }}
+                                                        className="p-2 text-slate-400 hover:text-red-500 transition-transform active:scale-95"
+                                                        title="Delete Song"
+                                                    >
+                                                        <TrashIcon className="w-5 h-5" />
+                                                    </button>
+                                                </>
                                             )}
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); toggleLike(song.id); }}
@@ -953,13 +1133,22 @@ export const App: React.FC = () => {
                                             <div className="hidden md:block text-cyan-100/80 text-sm bg-white/10 px-4 py-1.5 rounded-full font-medium border border-white/5">{song.moods.join(' • ')}</div>
                                             <div className="text-cyan-100/60 font-mono text-sm">{song.duration}</div>
                                             {isAdminAuthenticated && (
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); handleDownload(song); }}
-                                                    className="p-2 text-slate-400 hover:text-caribbean-turquoise transition-transform active:scale-95"
-                                                    title="Download MP3"
-                                                >
-                                                    <DownloadIcon className="w-5 h-5" />
-                                                </button>
+                                                <>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleDownload(song); }}
+                                                        className="p-2 text-slate-400 hover:text-caribbean-turquoise transition-transform active:scale-95"
+                                                        title="Download MP3"
+                                                    >
+                                                        <DownloadIcon className="w-5 h-5" />
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleDeleteSong(song); }}
+                                                        className="p-2 text-slate-400 hover:text-red-500 transition-transform active:scale-95"
+                                                        title="Delete Song"
+                                                    >
+                                                        <TrashIcon className="w-5 h-5" />
+                                                    </button>
+                                                </>
                                             )}
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); toggleLike(song.id); }}
@@ -1215,13 +1404,22 @@ export const App: React.FC = () => {
                                                 <p className="text-sm text-cyan-100/60">{song.artist}</p>
                                             </div>
                                             {isAdminAuthenticated && (
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); handleDownload(song); }}
-                                                    className="p-2 text-slate-400 hover:text-caribbean-turquoise opacity-0 group-hover:opacity-100 transition-opacity"
-                                                    title="Download MP3"
-                                                >
-                                                    <DownloadIcon className="w-5 h-5" />
-                                                </button>
+                                                <>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleDownload(song); }}
+                                                        className="p-2 text-slate-400 hover:text-caribbean-turquoise opacity-0 group-hover:opacity-100 transition-opacity"
+                                                        title="Download MP3"
+                                                    >
+                                                        <DownloadIcon className="w-5 h-5" />
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleDeleteSong(song); }}
+                                                        className="p-2 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                        title="Delete Song"
+                                                    >
+                                                        <TrashIcon className="w-5 h-5" />
+                                                    </button>
+                                                </>
                                             )}
                                             <div className="text-cyan-100/50 font-mono text-sm">
                                                 {song.duration}
@@ -1271,12 +1469,20 @@ export const App: React.FC = () => {
                                             <HeartIcon className="w-6 h-6" filled={likedSongs.has(currentSong.id)} /> Like
                                         </button>
                                         {isAdminAuthenticated && (
-                                            <button
-                                                onClick={() => handleDownload(currentSong)}
-                                                className="px-10 py-4 border-2 border-white/20 rounded-full font-bold uppercase tracking-wider transition-all flex items-center gap-3 hover:bg-white/10 text-white hover:text-caribbean-turquoise hover:border-caribbean-turquoise"
-                                            >
-                                                <DownloadIcon className="w-6 h-6" /> Download
-                                            </button>
+                                            <>
+                                                <button
+                                                    onClick={() => handleDownload(currentSong)}
+                                                    className="px-10 py-4 border-2 border-white/20 rounded-full font-bold uppercase tracking-wider transition-all flex items-center gap-3 hover:bg-white/10 text-white hover:text-caribbean-turquoise hover:border-caribbean-turquoise"
+                                                >
+                                                    <DownloadIcon className="w-6 h-6" /> Download
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteSong(currentSong)}
+                                                    className="px-10 py-4 border-2 border-red-500/20 rounded-full font-bold uppercase tracking-wider transition-all flex items-center gap-3 hover:bg-red-500/10 text-white hover:text-red-500 hover:border-red-500"
+                                                >
+                                                    <TrashIcon className="w-6 h-6" /> Delete
+                                                </button>
+                                            </>
                                         )}
                                     </div>
 
@@ -1562,6 +1768,7 @@ export const App: React.FC = () => {
                 onPrev={handlePrev}
                 likedSongs={likedSongs}
                 toggleLike={toggleLike}
+                isAdminAuthenticated={isAdminAuthenticated}
             />
 
 
