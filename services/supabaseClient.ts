@@ -14,6 +14,16 @@ export const supabase = createClient(supabaseUrl || '', supabaseKey || '');
 
 // --- Database Types (Matches Schema) ---
 
+export interface DatabaseAlbum {
+    id: string;
+    title: string;
+    artist: string;
+    release_year: number;
+    cover_art: string;
+    description: string;
+    created_at?: string;
+}
+
 export interface DatabaseSong {
     id: string;
     title: string;
@@ -25,6 +35,7 @@ export interface DatabaseSong {
     likes: number;
     moods: string[];
     lyrics?: string;
+    album_id?: string;
     created_at?: string;
 }
 
@@ -39,6 +50,27 @@ export interface DatabaseProfile {
 }
 
 // --- Helper Functions ---
+
+export const getAlbums = async () => {
+    const { data, error } = await supabase
+        .from('albums')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data as DatabaseAlbum[];
+};
+
+export const createAlbum = async (album: Omit<DatabaseAlbum, 'id' | 'created_at'>) => {
+    const { data, error } = await supabase
+        .from('albums')
+        .insert([album])
+        .select()
+        .single();
+
+    if (error) throw error;
+    return data as DatabaseAlbum;
+};
 
 export const getSongs = async () => {
     const { data, error } = await supabase

@@ -9,7 +9,7 @@ import ThemeSelector, { THEMES } from './components/ThemeSelector';
 import { PlayIcon, UploadIcon, MusicNoteIcon, SearchIcon, HeartIcon, SettingsIcon, UserIcon, ShareIcon, PlusIcon, ImageIcon, ListIcon, PencilIcon, CheckIcon, XMarkIcon, PaletteIcon, DownloadIcon } from './components/Icons';
 import { uploadToCloudinary } from './services/cloudinaryService';
 import ImageEditor from './components/ImageEditor';
-import { getProfile, getSongs, updateProfile, uploadSongMetadata } from './services/supabaseClient';
+import { getProfile, getSongs, updateProfile, uploadSongMetadata, getAlbums, createAlbum } from './services/supabaseClient';
 
 
 export const App: React.FC = () => {
@@ -142,44 +142,81 @@ export const App: React.FC = () => {
                     if (profile.image_url) setArtistProfileImage(profile.image_url);
                 }
 
-                // 2. Load Songs
+                // 2. Load Albums
+                let loadedAlbums: Album[] = [];
+                const dbAlbums = await getAlbums();
+                if (dbAlbums && dbAlbums.length > 0) {
+                    loadedAlbums = dbAlbums.map(a => ({
+                        id: a.id,
+                        title: a.title,
+                        artist: a.artist,
+                        releaseYear: a.release_year,
+                        coverArt: a.cover_art || 'https://images.unsplash.com/photo-1596323083648-523c52405d1b?q=80&w=800&auto=format&fit=crop',
+                        description: a.description,
+                        songs: []
+                    }));
+                } else {
+                    // If no albums in DB, we could initialize with defaults or empty.
+                    // For now, let's keep it empty or use INITIAL_ALBUMS if we want offline support,
+                    // but better to rely on DB for source of truth.
+                    // loadedAlbums = INITIAL_ALBUMS; // Only if we want to fallback
+                }
+
+                // 3. Load Songs
                 const songs = await getSongs();
                 if (songs && songs.length > 0) {
-                    setAlbums(prevAlbums => {
-                        const newAlbums = [...prevAlbums];
-                        // Distribute songs to albums or a default 'Singles' album
-                        // For simplicity in this demo, we can just push them all to the first album or match by ID if we stored album_id
-                        // Let's iterate and match album_id
-                        songs.forEach(dbSong => {
-                            // Check if song already exists to prevent dupes on re-renders (though useEffect runs once)
-                            // Actually, better to reset songs or merge safely.
-                            // Simplified: Find album and add song.
-                            const targetAlbumIndex = newAlbums.findIndex(a => a.id === dbSong.album_id) !== -1
-                                ? newAlbums.findIndex(a => a.id === dbSong.album_id)
-                                : 0; // Default to first album if ID outdated
+                    // Map songs to albums
+                    // If we have albums, put songs in them.
+                    // If a song has no album_id or album not found, put in "Uploads" default.
 
-                            if (targetAlbumIndex !== -1) {
-                                const album = newAlbums[targetAlbumIndex];
-                                if (!album.songs.find(s => s.id === dbSong.id)) {
-                                    album.songs.push({
-                                        id: dbSong.id,
-                                        title: dbSong.title,
-                                        artist: dbSong.artist,
-                                        duration: dbSong.duration,
-                                        audioSrc: dbSong.audio_url,
-                                        coverArt: dbSong.cover_url || album.coverArt,
-                                        albumId: album.id,
-                                        plays: dbSong.plays,
-                                        likes: dbSong.likes,
-                                        moods: dbSong.moods,
-                                        lyrics: dbSong.lyrics
-                                    });
-                                }
+                    const uploadsAlbumId = 'default-uploads';
+                    let uploadsAlbum = loadedAlbums.find(a => a.id === uploadsAlbumId);
+
+                    songs.forEach(dbSong => {
+                        const targetAlbumId = dbSong.album_id;
+                        let targetAlbum = loadedAlbums.find(a => a.id === targetAlbumId);
+
+                        if (!targetAlbum) {
+                            // If not found, create/use default Uploads album (local only for display if we don't save it)
+                            // But better to save it if we want persistence. 
+                            // For viewing, we just create a bucket.
+                            if (!uploadsAlbum) {
+                                uploadsAlbum = {
+                                    id: uploadsAlbumId,
+                                    title: 'Uploads',
+                                    artist: 'Arion Solivion',
+                                    releaseYear: new Date().getFullYear(),
+                                    coverArt: 'https://images.unsplash.com/photo-1596323083648-523c52405d1b?q=80&w=800&auto=format&fit=crop',
+                                    description: 'Uploaded songs.',
+                                    songs: []
+                                };
+                                loadedAlbums.push(uploadsAlbum);
                             }
+                            targetAlbum = uploadsAlbum;
+                        }
+
+                        targetAlbum.songs.push({
+                            id: dbSong.id,
+                            title: dbSong.title,
+                            artist: dbSong.artist,
+                            duration: dbSong.duration,
+                            audioSrc: dbSong.audio_url,
+                            coverArt: dbSong.cover_url || targetAlbum.coverArt,
+                            albumId: targetAlbum.id,
+                            plays: dbSong.plays,
+                            likes: dbSong.likes,
+                            moods: dbSong.moods,
+                            lyrics: dbSong.lyrics
                         });
-                        return newAlbums;
                     });
                 }
+
+                if (loadedAlbums.length > 0) {
+                    setAlbums(loadedAlbums);
+                    // Update default selection if needed
+                    if (!currentAlbum) setCurrentAlbum(loadedAlbums[0]);
+                }
+
             } catch (error) {
                 console.error("Failed to fetch data from Supabase:", error);
             }
@@ -238,7 +275,9 @@ export const App: React.FC = () => {
         if (viewState === ViewState.ALBUM_DETAILS && currentAlbum) return currentAlbum.songs;
         if (viewState === ViewState.LIBRARY) return filteredSongs;
         // Default playlist is popular songs if on home screen
-        return viewState === ViewState.HOME ? popularSongs : albums[0].songs;
+        return viewState === ViewState.HOME
+            ? popularSongs
+            : (albums.length > 0 ? albums[0].songs : []);
     };
     const playlist = getPlaylist();
 
@@ -254,6 +293,9 @@ export const App: React.FC = () => {
         if (!currentSong) {
             if (albums.length > 0 && albums[0].songs.length > 0) {
                 handlePlaySong(albums[0].songs[0], albums[0]);
+            } else if (albums.length === 0) {
+                // No albums, do nothing or show alert
+                console.log("No songs to play.");
             }
             return;
         }
@@ -469,31 +511,45 @@ export const App: React.FC = () => {
         }
     };
 
-    const handleCreateAlbum = (e: React.FormEvent) => {
+    const handleCreateAlbum = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newAlbumTitle.trim()) {
             alert("Please enter an album title.");
             return;
         }
 
-        const newAlbum: Album = {
-            id: `album-${Date.now()}`,
-            title: newAlbumTitle,
-            artist: 'Arion Solivion',
-            releaseYear: new Date().getFullYear(),
-            coverArt: newAlbumCover || 'https://images.unsplash.com/photo-1596323083648-523c52405d1b?q=80&w=800&auto=format&fit=crop',
-            description: newAlbumDesc || 'A new collection of sounds.',
-            songs: []
-        };
+        try {
+            const newDbAlbum = await createAlbum({
+                title: newAlbumTitle,
+                artist: 'Arion Solivion',
+                release_year: new Date().getFullYear(),
+                cover_art: newAlbumCover || 'https://images.unsplash.com/photo-1596323083648-523c52405d1b?q=80&w=800&auto=format&fit=crop',
+                description: newAlbumDesc || 'A new collection of sounds.'
+            });
 
-        setAlbums([newAlbum, ...albums]);
-        setSelectedUploadAlbumId(newAlbum.id); // Auto-select new album for uploads
+            const newAlbum: Album = {
+                id: newDbAlbum.id, // Use UUID from DB
+                title: newDbAlbum.title,
+                artist: newDbAlbum.artist,
+                releaseYear: newDbAlbum.release_year,
+                coverArt: newDbAlbum.cover_art,
+                description: newDbAlbum.description,
+                songs: []
+            };
 
-        // Reset form
-        setNewAlbumTitle('');
-        setNewAlbumDesc('');
-        setNewAlbumCover(null);
-        alert(`Album "${newAlbum.title}" created successfully! You can now upload songs to it.`);
+            setAlbums([newAlbum, ...albums]);
+            setSelectedUploadAlbumId(newAlbum.id); // Auto-select new album for uploads
+
+            // Reset form
+            setNewAlbumTitle('');
+            setNewAlbumDesc('');
+            setNewAlbumCover(null);
+            alert(`Album "${newAlbum.title}" created successfully! You can now upload songs to it.`);
+
+        } catch (error) {
+            console.error("Failed to create album:", error);
+            alert("Failed to create album in database.");
+        }
     };
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -554,16 +610,8 @@ export const App: React.FC = () => {
                 duration: newSong.duration,
                 moods: newSong.moods,
                 lyrics: uploadSongLyrics || undefined,
-                // Note: We need album_id in the DB schema to link it back correctly.
-                // Assuming schema has album_id uuid. We need to cast it or handle it.
-                // For this demo, we'll try to pass it if schema allows, or skip if strict.
-                // Schema has album_id uuid.
-                // We need to ensure the passed ID is a valid UUID or handle the error.
-                // If our local IDs are not UUIDs (e.g. "album-1"), this might fail constraint.
-                // Let's rely on the fact that for new uploads we might not have a perfect match unless we sync albums too.
-                // For now, let's omit album_id to avoid constraint errors if we haven't synced albums table, 
-                // OR better, let's just save valid fields.
-            } as any); // Type cast if needed depending on exact schema match
+                album_id: selectedUploadAlbumId // Pass the valid UUID
+            });
 
             alert(`Song "${newSong.title}" uploaded to Cloud & Database!`);
 
